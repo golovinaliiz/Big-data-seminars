@@ -10,34 +10,67 @@ let reviews = [];
 let apiToken = ""; // kept for UI compatibility, but not used with local inference
 let sentimentPipeline = null; // transformers.js text-classification pipeline
 
-// DOM elements
-const analyzeBtn = document.getElementById("analyze-btn");
-const reviewText = document.getElementById("review-text");
-const sentimentResult = document.getElementById("sentiment-result");
-const loadingElement = document.querySelector(".loading");
-const errorElement = document.getElementById("error-message");
-const apiTokenInput = document.getElementById("api-token");
-const statusElement = document.getElementById("status"); // optional status label for model loading
+// DOM elements (инициализируем позже)
+let analyzeBtn;
+let reviewText;
+let sentimentResult;
+let loadingElement;
+let errorElement;
+let apiTokenInput;
+let statusElement;
 
-// Initialize the app
-document.addEventListener("DOMContentLoaded", function () {
+// Универсальная инициализация (DOM может быть уже загружен)
+function init() {
+  // Если DOM ещё грузится — дождёмся
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initOnce);
+  } else {
+    initOnce();
+  }
+}
+
+function initOnce() {
+  // Защита от повторной инициализации
+  if (initOnce._initialized) return;
+  initOnce._initialized = true;
+
+  // Получаем элементы
+  analyzeBtn = document.getElementById("analyze-btn");
+  reviewText = document.getElementById("review-text");
+  sentimentResult = document.getElementById("sentiment-result");
+  loadingElement = document.querySelector(".loading");
+  errorElement = document.getElementById("error-message");
+  apiTokenInput = document.getElementById("api-token");
+  statusElement = document.getElementById("status");
+
+  // Базовые проверки
+  if (!analyzeBtn || !reviewText || !sentimentResult) {
+    console.error("Required DOM elements not found. Check IDs in HTML.");
+    return;
+  }
+
   // Load the TSV file (Papa Parse)
   loadReviews();
 
   // Set up event listeners
   analyzeBtn.addEventListener("click", analyzeRandomReview);
-  apiTokenInput.addEventListener("change", saveApiToken);
 
-  // Load saved API token if exists (not used with local inference but kept for UI)
-  const savedToken = localStorage.getItem("hfApiToken");
-  if (savedToken) {
-    apiTokenInput.value = savedToken;
-    apiToken = savedToken;
+  if (apiTokenInput) {
+    apiTokenInput.addEventListener("change", saveApiToken);
+
+    const savedToken = localStorage.getItem("hfApiToken");
+    if (savedToken) {
+      apiTokenInput.value = savedToken;
+      apiToken = savedToken;
+    }
   }
 
   // Initialize transformers.js sentiment model
   initSentimentModel();
-});
+}
+
+// Запускаем инициализацию
+init();
 
 // Initialize transformers.js text-classification pipeline with a supported model
 async function initSentimentModel() {
@@ -49,7 +82,7 @@ async function initSentimentModel() {
     sentimentPipeline = await pipeline(
       "text-classification",
       "Xenova/distilbert-base-uncased-finetuned-sst-2-english"
-    );[web:23][web:26]
+    );[web:26][web:39]
 
     if (statusElement) {
       statusElement.textContent = "Sentiment model ready";
@@ -127,7 +160,9 @@ function analyzeRandomReview() {
   reviewText.textContent = selectedReview;
 
   // Show loading state
-  loadingElement.style.display = "block";
+  if (loadingElement) {
+    loadingElement.style.display = "block";
+  }
   analyzeBtn.disabled = true;
   sentimentResult.innerHTML = ""; // Reset previous result
   sentimentResult.className = "sentiment-result"; // Reset classes
@@ -140,7 +175,9 @@ function analyzeRandomReview() {
       showError(error.message || "Failed to analyze sentiment.");
     })
     .finally(() => {
-      loadingElement.style.display = "none";
+      if (loadingElement) {
+        loadingElement.style.display = "none";
+      }
       analyzeBtn.disabled = false;
     });
 }
@@ -151,8 +188,6 @@ async function analyzeSentiment(text) {
     throw new Error("Sentiment model is not initialized.");
   }
 
-  // transformers.js text-classification pipeline returns:
-  // [{ label: 'POSITIVE', score: 0.99 }, ...]
   const output = await sentimentPipeline(text);
 
   if (!Array.isArray(output) || output.length === 0) {
@@ -165,6 +200,11 @@ async function analyzeSentiment(text) {
 
 // ===== Функция логирования в Google Sheets через Web App =====
 async function logToSheet({ review, label, score, sentiment }) {
+  if (!SHEET_WEBAPP_URL || SHEET_WEBAPP_URL.includes("XXXX")) {
+    console.warn("SHEET_WEBAPP_URL is not configured, skipping logging.");
+    return;
+  }
+
   try {
     const payload = {
       review,
@@ -172,96 +212,4 @@ async function logToSheet({ review, label, score, sentiment }) {
       score,
       sentiment,
       ts: new Date().toISOString(),
-      pageUrl: window.location.href
-    };
-
-    await fetch(SHEET_WEBAPP_URL, {
-      method: "POST",
-      mode: "no-cors", // простой способ обойти CORS для Web App GAS (ответ не читаем)[web:16][web:24]
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
-
-    // При mode: "no-cors" ответ будет opaque, это нормально, нам главное — запись в таблицу.
-  } catch (e) {
-    console.error("Failed to log to Google Sheets", e);
-  }
-}
-
-// Display sentiment result
-function displaySentiment(result) {
-  // Default to neutral if we can't parse the result
-  let sentiment = "neutral";
-  let score = 0.5;
-  let label = "NEUTRAL";
-
-  // Expected format: [[{label: 'POSITIVE', score: 0.99}]]
-  if (
-    Array.isArray(result) &&
-    result.length > 0 &&
-    Array.isArray(result[0]) &&
-    result[0].length > 0
-  ) {
-    const sentimentData = result[0][0];
-
-    if (sentimentData && typeof sentimentData === "object") {
-      label =
-        typeof sentimentData.label === "string"
-          ? sentimentData.label.toUpperCase()
-          : "NEUTRAL";
-      score =
-        typeof sentimentData.score === "number"
-          ? sentimentData.score
-          : 0.5;
-
-      // Determine sentiment bucket
-      if (label === "POSITIVE" && score > 0.5) {
-        sentiment = "positive";
-      } else if (label === "NEGATIVE" && score > 0.5) {
-        sentiment = "negative";
-      } else {
-        sentiment = "neutral";
-      }
-    }
-  }
-
-  // Update UI
-  sentimentResult.classList.add(sentiment);
-  sentimentResult.innerHTML = `
-        <i class="fas ${getSentimentIcon(sentiment)} icon"></i>
-        <span>${label} (${(score * 100).toFixed(1)}% confidence)</span>
-    `;
-
-  // Логирование события в Google Sheets
-  logToSheet({
-    review: reviewText.textContent,
-    label,
-    score,
-    sentiment
-  });
-}
-
-// Get appropriate icon for sentiment bucket
-function getSentimentIcon(sentiment) {
-  switch (sentiment) {
-    case "positive":
-      return "fa-thumbs-up";
-    case "negative":
-      return "fa-thumbs-down";
-    default:
-      return "fa-question-circle";
-  }
-}
-
-// Show error message
-function showError(message) {
-  errorElement.textContent = message;
-  errorElement.style.display = "block";
-}
-
-// Hide error message
-function hideError() {
-  errorElement.style.display = "none";
-}
+      
