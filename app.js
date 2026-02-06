@@ -2,6 +2,9 @@
 
 import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6/dist/transformers.min.js";
 
+// ===== Константа с URL Web App Google Apps Script =====
+const SHEET_WEBAPP_URL = "https://script.google.com/macros/s/XXXX/exec"; // TODO: вставь свой URL веб-приложения[web:12]
+
 // Global variables
 let reviews = [];
 let apiToken = ""; // kept for UI compatibility, but not used with local inference
@@ -43,12 +46,10 @@ async function initSentimentModel() {
       statusElement.textContent = "Loading sentiment model...";
     }
 
-    // Use a transformers.js-supported text-classification model.
-    // Xenova/distilbert-base-uncased-finetuned-sst-2-english is a common choice.
     sentimentPipeline = await pipeline(
       "text-classification",
       "Xenova/distilbert-base-uncased-finetuned-sst-2-english"
-    );
+    );[web:23][web:26]
 
     if (statusElement) {
       statusElement.textContent = "Sentiment model ready";
@@ -76,7 +77,7 @@ function loadReviews() {
     .then((tsvData) => {
       Papa.parse(tsvData, {
         header: true,
-        delimiter: "\t",
+        delimiter: "\\t",
         complete: (results) => {
           reviews = results.data
             .map((row) => row.text)
@@ -162,6 +163,33 @@ async function analyzeSentiment(text) {
   return [output];
 }
 
+// ===== Функция логирования в Google Sheets через Web App =====
+async function logToSheet({ review, label, score, sentiment }) {
+  try {
+    const payload = {
+      review,
+      label,
+      score,
+      sentiment,
+      ts: new Date().toISOString(),
+      pageUrl: window.location.href
+    };
+
+    await fetch(SHEET_WEBAPP_URL, {
+      method: "POST",
+      mode: "no-cors", // простой способ обойти CORS для Web App GAS (ответ не читаем)[web:16][web:24]
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    // При mode: "no-cors" ответ будет opaque, это нормально, нам главное — запись в таблицу.
+  } catch (e) {
+    console.error("Failed to log to Google Sheets", e);
+  }
+}
+
 // Display sentiment result
 function displaySentiment(result) {
   // Default to neutral if we can't parse the result
@@ -205,6 +233,14 @@ function displaySentiment(result) {
         <i class="fas ${getSentimentIcon(sentiment)} icon"></i>
         <span>${label} (${(score * 100).toFixed(1)}% confidence)</span>
     `;
+
+  // Логирование события в Google Sheets
+  logToSheet({
+    review: reviewText.textContent,
+    label,
+    score,
+    sentiment
+  });
 }
 
 // Get appropriate icon for sentiment bucket
